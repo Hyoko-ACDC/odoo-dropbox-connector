@@ -11,8 +11,19 @@ DROPBOX_DOCUMENT_TEMPLATES_PATH = '/Admin/Document Templates'
 
 TOKEN = os.environ['DROPBOX_TOKEN']
 
-redis_url = os.environ['REDISTOGO_URL']
-redis_client = redis.from_url(redis_url, decode_responses=True)
+host = os.environ['REDIS_HOST']
+redis_password = os.environ['REDIS_PASSWORD']
+
+
+redis_client = redis.Redis(host=host, 
+                           port=6379, 
+                           username='default',
+                           password=redis_password,
+                           decode_responses=True,
+                           socket_timeout=None,
+                           connection_pool=None,
+                           charset='utf-8',
+                           errors='strict')
 
 def list_dropbox_content_with_targets(folder_results, targets, list_type='folder', full_path=False, format_dict_create=False):
     """List content of given folder_results filtered by the targets excluding the basic path
@@ -150,13 +161,19 @@ def delete_file_from_dict(file_path, path_dict):
             else:
                 raise AttributeError("path: {} does not exist at {}".format(path, seg))
 
+    print("SHOULD DELETE: {} for dictionnary: \n {}\n\n and current:  {}".format(file_or_dir, path_dict,current_folder) , flush=True)
+    
     if file_or_dir in current_folder:
         del current_folder[file_or_dir]
         return True
+
     
-    if 'file' in current_folder and file_or_dir in current_folder['files'] :
+    if 'files' in current_folder and file_or_dir in current_folder['files'] :
         current_folder['files'].remove(file_or_dir)
+        
+
         return True
+    
     return False
 
 def add_file_from_dict(file_path, path_dict):
@@ -171,6 +188,8 @@ def add_file_from_dict(file_path, path_dict):
                 current_folder = current_folder[seg]
             else:
                 raise AttributeError("path: {} does not exist at {}".format(path, seg))
+
+    print("SHOULD ADDFILE or DICT: {} for dictionnary: \n {}\n\n and current:  {}".format(file_path, path_dict,current_folder), flush=True)
     if not 'files' in current_folder:
         current_folder['files'] = []
     
@@ -179,13 +198,26 @@ def add_file_from_dict(file_path, path_dict):
         return True
     return False
 
+def get_cursor():
+    return redis_client.hget('cursors', 'cursor')
+
+def set_cursor(cursor):
+    return redis_client.hset('cursors', 'cursor', cursor)
+
+def set_dict(register, path_dict):
+    path_dict_json = json.dumps(path_dict)
+    return redis_client.set(REDIS_USER_DMS, path_dict_json)
+
+def get_dict(register):
+    path_dict = redis_client.get(register)
+    return json.loads(path_dict)
 
 def load_dms(path, register):
 
     dbx = dropbox.Dropbox(TOKEN)
 
     # cursor for the user (None the first time)
-    cursor = redis_client.get('cursor')
+    cursor = get_cursor()
 
     has_more = True
 
@@ -207,7 +239,7 @@ def load_dms(path, register):
 
         # Update cursor
         cursor = folder_results.cursor
-        redis_client.set('cursor', cursor)
+        set_cursor(cursor)
 
         # Repeat only if there's more to do
         has_more = folder_results.has_more

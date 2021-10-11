@@ -2,7 +2,7 @@ version: "3.8"
 services:
   dropbox_connector:
     build: .
-    command: python main.py
+    command: ["python", "main.py"]
     ports:
       - "8006:5000"
     depends_on:
@@ -13,6 +13,6 @@ services:
       - .env
   
   redis:
-    image: redis:alpine
+    build: ./redis/
     ports:
         - '6379:6379'

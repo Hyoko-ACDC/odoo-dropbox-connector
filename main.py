@@ -15,13 +15,12 @@ import redis
 
 app = Flask(__name__)
 
-redis_url = os.environ['REDISTOGO_URL']
-redis_client = redis.from_url(redis_url, decode_responses=True)
+host = os.environ['REDIS_HOST']
+redis_password = os.environ['REDIS_PASSWORD']
 
 APP_SECRET = os.environ['APP_KEY']
 TOKEN = os.environ['DROPBOX_TOKEN']
 
-print(redis_url)
 
 # A random secret used by Flask to encrypt session data cookies
 app.secret_key = os.environ['FLASK_SECRET_KEY']
@@ -54,14 +53,15 @@ def webhook():
     computed_signature = hmac.new(key, request.data, sha256).hexdigest()
     if not hmac.compare_digest(signature, computed_signature):
         abort(403)
+    print("HOOOOOOOK")
 
     for account in json.loads(request.data)['list_folder']['accounts']:
         # We need to respond quickly to the webhook request, so we do the
         # actual work in a separate thread. For more robustness, it's a
         # good idea to add the work to a reliable queue and process the queue
         # in a worker process.
-        # threading.Thread(target=process_user, args=(account,)).start()
-        process_user(account)
+        threading.Thread(target=process_user, args=(account,)).start()
+        # process_user(account)
         
     return ''
 
@@ -69,47 +69,50 @@ def process_user(account):
     '''Call /files/list_folder for the given user ID and process any changes.'''
 
     # cursor for the user (Only changes should be listed here)
-    cursor = redis_client.get('cursor')
+    cursor = get_cursor()
 
     dbx = Dropbox(TOKEN)
     has_more = True
 
+    print("Web Hook Activated", flush=True)
     while has_more:
         assert(cursor is not None)
 
         list_folder_continue = dbx.files_list_folder_continue(cursor)
 
-        path_dict = redis_client.get('dmsFitspro')
-        path_dict = json.loads(path_dict)
-        
+        path_dict = get_dict(REDIS_USER_DMS)
 
-        print(" - OLD - ")
+        print(" - OLD - " * 3, flush=True)
         print(json.dumps(path_dict['Users']['Students']['Christopher Smith'], indent=2), file=sys.stdout)
-        print(" - Change - ")
+        print(" - Change - " * 3, flush=True)
         print(list_folder_continue)
 
         # Proceed to changes
         for change in list_folder_continue.entries:
             path = change.path_display
 
+            print(change)
+
 
             if isinstance(change, DeletedMetadata):
-                delete_file_from_dict(path, path_dict)
+                sucess = delete_file_from_dict(path, path_dict)
+                print("DELETE! Sucess = {}".format(sucess), flush=True)
             if isinstance(change, FileMetadata):
                 add_file_from_dict(path, path_dict)
+                print("ADDFILE!", flush=True)
             if isinstance(change, FolderMetadata):
+                print("ADDFOLDER!", flush=True)
                 add_dir_from_dict(path, path_dict)
         
-        print(" - New -")
-        print(json.dumps(path_dict['Users']['Students']['Christopher Smith'], indent=2), file=sys.stdout)
+        print(" - New -" * 3, flush=True)
+        print(json.dumps(path_dict['Users']['Students']['Christopher Smith'], indent=2), file=sys.stdout, flush=True)
 
 
-        path_dict_json = json.dumps(path_dict)
-        redis_client.set('dmsFitspro', path_dict_json)
+        set_dict(DROPBOX_USER_DMS_PATH, path_dict)
 
         # Update cursor
         cursor = list_folder_continue.cursor
-        redis_client.set('cursor', cursor)
+        set_cursor(cursor)
 
         # Repeat only if there's more to do
         has_more = list_folder_continue.has_more
@@ -121,6 +124,6 @@ if __name__ == '__main__':
     load_dms(DROPBOX_USER_DMS_PATH, REDIS_USER_DMS)
     
     # Load document templates dms dict for the first time
-    load_dms(DROPBOX_DOCUMENT_TEMPLATES_PATH, REDIS_DOCUMENT_TEMPLATES)
+    # load_dms(DROPBOX_DOCUMENT_TEMPLATES_PATH, REDIS_DOCUMENT_TEMPLATES)
 
     app.run(debug=True, host='0.0.0.0')
