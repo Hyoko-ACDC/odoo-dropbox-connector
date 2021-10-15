@@ -6,8 +6,7 @@ import threading
 import urllib.parse
 import sys
 
-from dropbox import Dropbox, DropboxOAuth2Flow
-from dropbox.files import DeletedMetadata, FolderMetadata, WriteMode, FileMetadata
+from dropbox import Dropbox
 from flask import abort, Flask, redirect, render_template, Response, request, session, url_for
 from utils import *
 import redis 
@@ -49,11 +48,10 @@ def webhook():
     # Make sure this is a valid request from Dropbox
     signature = request.headers.get('X-Dropbox-Signature')
     key = bytes(APP_SECRET, encoding="ascii")
-    print(request)
+    iprint(request)
     computed_signature = hmac.new(key, request.data, sha256).hexdigest()
     if not hmac.compare_digest(signature, computed_signature):
         abort(403)
-    print("HOOOOOOOK")
 
     for account in json.loads(request.data)['list_folder']['accounts']:
         # We need to respond quickly to the webhook request, so we do the
@@ -70,11 +68,11 @@ def process_user(account):
 
     # cursor for the user (Only changes should be listed here)
     cursor = get_cursor()
+    iprint("Old cursor {}".format(cursor), False)
 
     dbx = Dropbox(TOKEN)
     has_more = True
 
-    print("Web Hook Activated", flush=True)
     while has_more:
         assert(cursor is not None)
 
@@ -82,33 +80,32 @@ def process_user(account):
 
         path_dict = get_dict(REDIS_USER_DMS)
 
-        print(" - OLD - " * 3, flush=True)
-        print(json.dumps(path_dict['Users']['Students']['Christopher Smith'], indent=2), file=sys.stdout)
-        print(" - Change - " * 3, flush=True)
-        print(list_folder_continue)
+        iprint(" - OLD - " * 3, False)
+        iprint(json.dumps(path_dict['Users']['Students']['Christopher Smith'], indent=2), False)
+        iprint(" - Change - " * 3, False)
+        iprint(list_folder_continue, True)
+
+        # Cursor certinaly not up-to-date. 
+        # -> refresh dms representation in redis and fetch latest cursor.
+        if not list_folder_continue.entries:
+            iprint(" - No entries: load dms - " * 3)
+            load_user_dms()
+            iprint(json.dumps(path_dict['Users']['Students']['Christopher Smith'], indent=2), False)
+            break
+
 
         # Proceed to changes
         for change in list_folder_continue.entries:
             path = change.path_display
+            iprint("Received following path : {}".format(path))
 
-            print(change)
+            # Changes in dms user
+            if path.startswith("/Users"):
+                update_user_dms(path, path_dict, change)
 
-
-            if isinstance(change, DeletedMetadata):
-                sucess = delete_file_from_dict(path, path_dict)
-                print("DELETE! Sucess = {}".format(sucess), flush=True)
-            if isinstance(change, FileMetadata):
-                add_file_from_dict(path, path_dict)
-                print("ADDFILE!", flush=True)
-            if isinstance(change, FolderMetadata):
-                print("ADDFOLDER!", flush=True)
-                add_dir_from_dict(path, path_dict)
-        
-        print(" - New -" * 3, flush=True)
-        print(json.dumps(path_dict['Users']['Students']['Christopher Smith'], indent=2), file=sys.stdout, flush=True)
-
-
-        set_dict(DROPBOX_USER_DMS_PATH, path_dict)
+            if path.startswith("/Admin/Document Templates"):
+                iprint("HERE in /Admin/Document Templates")
+                update_doc_templates(change)
 
         # Update cursor
         cursor = list_folder_continue.cursor
@@ -116,12 +113,14 @@ def process_user(account):
 
         # Repeat only if there's more to do
         has_more = list_folder_continue.has_more
+    dbx.close()
 
 if __name__ == '__main__':
-    print("INIT REDIS DB")
+    iprint("INIT REDIS DB")
     
     # Load user dms dict for the first time
-    load_dms(DROPBOX_USER_DMS_PATH, REDIS_USER_DMS)
+    load_user_dms()
+    
     
     # Load document templates dms dict for the first time
     # load_dms(DROPBOX_DOCUMENT_TEMPLATES_PATH, REDIS_DOCUMENT_TEMPLATES)
