@@ -3,3 +3,4 @@ dropbox==11.18.0
 redis
 python-dotenv
 mammoth
+validators

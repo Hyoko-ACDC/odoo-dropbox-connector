@@ -5,18 +5,32 @@ import json
 import io
 from dropbox.files import DeletedMetadata, FolderMetadata, FileMetadata
 import mammoth
+import xmlrpc.client
+import base64
+import requests
 
 
+# REDIS REGISTERS
 REDIS_USER_DMS = 'dmsFitspro'
-DROPBOX_USER_DMS_PATH = 'Users'
-
 REDIS_DOCUMENT_TEMPLATES = 'dmsDocumentTemplates'
-DROPBOX_DOCUMENT_TEMPLATES_PATH = '/Admin/Document Templates'
+REDIS_DBX_HOOKO_SUBSCRIBERS = 'subscribers'  # list but stored as a string (need eval())
 
+
+
+# DROPBOX PATHS
+DROPBOX_USER_DMS_PATH = 'users'
+DROPBOX_DOCUMENT_TEMPLATES_PATH = '/admin/document templates'
+
+# SETTINGS
 TOKEN = os.environ['DROPBOX_TOKEN']
 
 host = os.environ['REDIS_HOST']
 redis_password = os.environ['REDIS_PASSWORD']
+
+# url = os.environ['ODOO_URL']
+db = os.environ['ODOO_DB']
+uid = os.environ['ODOO_USER']
+password = os.environ['ODOO_PASSWORD']
 
 
 redis_client = redis.Redis(host=host, 
@@ -33,6 +47,8 @@ redis_client = redis.Redis(host=host,
 def iprint(str_='', i=True):
     if i:
         print(str_, flush=True)
+
+
 def list_dropbox_content_with_targets(folder_results, targets, list_type='folder', full_path=False, format_dict_create=False):
     """List content of given folder_results filtered by the targets excluding the basic path
     params:
@@ -56,25 +72,25 @@ def list_dropbox_content_with_targets(folder_results, targets, list_type='folder
         if not isinstance(result,type_to_keep):
             continue
         
-        path_display = result.path_display
+        path_lower = result.path_lower
         if format_dict_create:
-            path_display = path_display[1:] if path_display.find('/') == 0 else path_display
+            path_lower = path_lower[1:] if path_lower.find('/') == 0 else path_lower
             if isinstance(result, FolderMetadata):
-                path_display += '/'
+                path_lower += '/'
         
         if not targets:
-            paths.append(path_display)
+            paths.append(path_lower)
             continue
         
         for target in targets:
-            base_index = path_display.find(target)
+            base_index = path_lower.find(target)
             
             # Target found
             if base_index != -1:
                 if full_path:
-                    paths.append(path_display)
+                    paths.append(path_lower)
                 else:
-                    paths.append(path_display[base_index:])
+                    paths.append(path_lower[base_index:])
     return paths
 
 
@@ -167,7 +183,7 @@ def delete_file_from_dict(file_path, path_dict):
             if seg in current_folder:
                 current_folder = current_folder[seg]
             else:
-                raise AttributeError("path: {} does not exist at {}".format(path, seg))
+                raise AttributeError("path: {} does not exist at {}".format(file_path, seg))
 
     iprint("SHOULD DELETE: {}".format(file_or_dir))
     
@@ -195,7 +211,7 @@ def add_file_from_dict(file_path, path_dict):
             if seg in current_folder:
                 current_folder = current_folder[seg]
             else:
-                raise AttributeError("path: {} does not exist at {}".format(path, seg))
+                raise AttributeError("path: {} does not exist at {}".format(file_path, seg))
 
     iprint("SHOULD ADDFILE or DICT: {}".format(file_path, path_dict))
     if not 'files' in current_folder:
@@ -205,6 +221,9 @@ def add_file_from_dict(file_path, path_dict):
         current_folder['files'].append(file)
         return True
     return False
+
+
+# Getters & Setters
 
 def get_cursor():
     return redis_client.hget('cursors', 'cursor')
@@ -219,6 +238,54 @@ def set_dict(register, path_dict):
 def get_dict(register):
     path_dict = redis_client.get(register)
     return json.loads(path_dict)
+
+def get_subsrcibers():
+    """Get the list of subscribers that registered to """
+    subscribers = redis_client.get(REDIS_DBX_HOOKO_SUBSCRIBERS)
+    if not subscribers:
+        subscribers = []
+    return eval(subscribers)
+
+def test_subscriber(subscriber):
+    try:
+        resp = requests.get(subscriber, timeout=10)
+    except:
+        return False
+    print(resp)
+    if resp.status_code != 200:
+        remove_subscriber(subscriber)
+        return False
+    return True
+
+def remove_subscriber(url):
+    subscribers = get_subsrcibers()
+    subscribers.remove(url)
+    redis_client.set(REDIS_DBX_HOOKO_SUBSCRIBERS, str(subscribers))
+
+
+def set_subscriber(url):
+    """Set the subscriber space. i.e. Enter the subscriber's url in the list of subscribers and set the appropriate user space in redis.
+    Where the key 
+    """
+    
+    # Add the subscriber to the list
+    print(url)
+    subscribers = redis_client.get(REDIS_DBX_HOOKO_SUBSCRIBERS)
+    if not subscribers:
+        subscribers = [url]
+    else:
+        subscribers = eval(subscribers)
+        
+        # Subscriber belongs already to the list
+        if url in subscribers:
+            return subscribers
+        subscribers.append(url)
+
+    redis_client.set(REDIS_DBX_HOOKO_SUBSCRIBERS, str(subscribers))
+
+    iprint(subscribers)
+
+    return subscribers
 
 def load_user_dms():
 
@@ -264,7 +331,9 @@ def add_dir_from_dict(dir_path, path_dict):
             if seg in current_folder:
                 current_folder = current_folder[seg]
             else:
-                raise AttributeError("path: {} does not exist at {}".format(path, seg))
+                error_msg = "path: {} does not exist at {}".format(dir_path, seg)
+                iprint(error_msg)
+                # raise AttributeError()
     if dir_ not in current_folder :
         current_folder[dir_] = {}
         return True
@@ -279,52 +348,58 @@ def update_doc_templates(change):
         
         redis_client.delete(change.name)
         content_info += "file {} has been deleted".format(change.name)
-        # TODO send info to frontend
+        # TODO send info to odoo : 
+        # send change.name
         
     if isinstance(change, FileMetadata):
         dbx = dropbox.Dropbox(TOKEN)
-        if change.name.endswith('.html'):
-            dbx.close()
-            return ''
+
+        # Connect to odoo
+        common = xmlrpc.client.ServerProxy(f'{url}/xmlrpc/2/common')
+        uid = common.authenticate(db, uid, password, {})
+        models = xmlrpc.client.ServerProxy(f'{url}/xmlrpc/2/object')
 
         content_hash = redis_client.hget(change.name, 'content_hash')
         if content_hash:
             # compare the hashes to see if the content has changed
             if change.content_hash != content_hash:
+                # TODO 
+                # send change.name, 
+                #      base64 pdf
+                #      link
                 content_info += "content has changed"
                 docx2html(change)
 
         else:
+            # TODO 
+            # Newly created file
+            # 
             content_info += "file {} has been added".format(change.name)
             
             
-            if not (change.name.endswith('.docx') or change.name.endswith('.html')):
+            if not change.name.endswith('.docx'):
 
                 content_info += " but it was not a docx. we supress it"
-                dbx.files_delete(change.path_display)
+                dbx.files_delete(change.path_lower)
             else:
                 redis_client.hset(change.name, 'content_hash', change.content_hash)
-                link = dbx.sharing_create_shared_link(change.path_display)
+                link = dbx.sharing_create_shared_link(change.path_lower)
                 redis_client.hset(change.name, 'link', link.url)
                 docx2html(change)
+
+                # Create file in Odoo
+                # TODO compute Docx b64 encoding
+                models.execute_kw(db, uid, password, 'template', 'create', [{
+                    'name': change.name,
+                    'link' : link,
+                    'file_docx' : docx_encoded
+                }])
                 
         dbx.close()
             # TODO Download and generate html from docx
 
     iprint(content_info)
-    
 
-def docx2html(change):
-    dbx = dropbox.Dropbox(TOKEN)
-    _, docx_file = dbx.files_download(change.path_display)
-    docx_file = io.BytesIO(docx_file.content)
-    html_file = mammoth.convert_to_html(docx_file)
-    iprint(html_file)
-    dbx.files_upload(html_file.value.encode(),
-                     '{}/{}'.format(DROPBOX_DOCUMENT_TEMPLATES_PATH,
-                     change.name.replace("docx", "html")),
-                     mode=dropbox.files.WriteMode.overwrite)
-    dbx.close()
 
 def update_user_dms(path, path_dict, change):
     if isinstance(change, DeletedMetadata):
@@ -337,8 +412,8 @@ def update_user_dms(path, path_dict, change):
         iprint("ADDFOLDER!")
         add_dir_from_dict(path, path_dict)
     
-    iprint(" - New -" * 3)
-    iprint(json.dumps(path_dict['Users']['Students']['Christopher Smith'], indent=2))
+    iprint(" - New -" * 3, False)
+    #iprint(json.dumps(path_dict['Users']['Students']['Christopher Smith'], indent=2), False)
 
 
     set_dict(DROPBOX_USER_DMS_PATH, path_dict)

@@ -1,16 +1,16 @@
 version: "3.8"
 services:
   dropbox_connector:
-    build: .
+    build: ./flask/
     command: ["python", "main.py"]
     ports:
       - "8006:5000"
     depends_on:
       - redis
     volumes:
-      - .:/python-flask
+      - ./flask:/python-flask
     env_file: 
-      - .env
+      - ./flask/.env
   
   redis:
     build: ./redis/

@@ -5,11 +5,18 @@ import os
 import threading
 import urllib.parse
 import sys
+import validators
+
+
 
 from dropbox import Dropbox
 from flask import abort, Flask, redirect, render_template, Response, request, session, url_for
+import requests  # Careful not to confuse request (which is the global FLask variable) and requests lib
 from utils import *
 import redis 
+
+
+
 
 
 app = Flask(__name__)
@@ -28,6 +35,50 @@ app.secret_key = os.environ['FLASK_SECRET_KEY']
 @app.route('/')
 def hello_world():
     return 'Hey, we have Flask in a Docker container!'
+
+@app.route('/subscribe', methods=['POST'])
+def subscribe():
+    """
+    End point use by Odoo instances (or other) to subscribe to the connector.
+    """
+    iprint("new subscriber")
+    if request.data:
+        return "data should be a form", 400
+    set_subscriber
+    public_url = request.form.get('public_url', False)
+    if not public_url:
+        iprint("public_url field is required") 
+        return "public_url field is required", 400
+    if not validators.url(public_url):
+        return "url malformed", 400
+    set_subscriber(public_url)
+    return "public_url: {} save to redis".format(public_url), 200
+
+
+@app.route('/subscribers_test', methods=['GET'])
+def subscribers_test():
+    """
+    Try sending http request to subscribers, delete if response not correct.
+    """
+    subscribers = get_subsrcibers()
+    removed_subscribers = []
+    for subscriber in subscribers:
+        if not test_subscriber(subscriber):
+            removed_subscribers.append(subscriber)
+            remove_subscriber(subscriber)
+    return "List of removed subcribers: {}".format(removed_subscribers)
+
+    iprint("new subscriber")
+    if request.data:
+        return "data should be a form", 400
+    set_subscriber
+    public_url = request.form.get('public_url', False)
+    if not public_url:
+        iprint("public_url field is required") 
+        return "public_url field is required", 400
+    set_subscriber(public_url)
+    return "public_url: {} save to redis".format(public_url), 200
+
 
 
 @app.route('/webhook', methods=['GET'])
@@ -81,7 +132,7 @@ def process_user(account):
         path_dict = get_dict(REDIS_USER_DMS)
 
         iprint(" - OLD - " * 3, False)
-        iprint(json.dumps(path_dict['Users']['Students']['Christopher Smith'], indent=2), False)
+        # iprint(json.dumps(path_dict['Users']['Students']['Christopher Smith'], indent=2), False)
         iprint(" - Change - " * 3, False)
         iprint(list_folder_continue, True)
 
@@ -90,21 +141,21 @@ def process_user(account):
         if not list_folder_continue.entries:
             iprint(" - No entries: load dms - " * 3)
             load_user_dms()
-            iprint(json.dumps(path_dict['Users']['Students']['Christopher Smith'], indent=2), False)
+            # iprint(json.dumps(path_dict['Users']['Students']['Christopher Smith'], indent=2), False)
             break
 
 
         # Proceed to changes
         for change in list_folder_continue.entries:
-            path = change.path_display
+            path = change.path_lower
             iprint("Received following path : {}".format(path))
 
             # Changes in dms user
-            if path.startswith("/Users"):
+            if path.startswith("/users"):
                 update_user_dms(path, path_dict, change)
 
-            if path.startswith("/Admin/Document Templates"):
-                iprint("HERE in /Admin/Document Templates")
+            if path.startswith("/admin/document templates"):
+                iprint("HERE in /admin/document templates")
                 update_doc_templates(change)
 
         # Update cursor
