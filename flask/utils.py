@@ -22,21 +22,21 @@ DROPBOX_USER_DMS_PATH = 'users'
 DROPBOX_DOCUMENT_TEMPLATES_PATH = '/admin/document templates'
 
 # SETTINGS
-TOKEN = os.environ['DROPBOX_TOKEN']
+DROPBOX_TOKEN = os.environ['DROPBOX_TOKEN']
 
-host = os.environ['REDIS_HOST']
-redis_password = os.environ['REDIS_PASSWORD']
+REDIS_HOST = os.environ['REDIS_HOST']
+REDIS_PASSWORD = os.environ['REDIS_PASSWORD']
 
 # url = os.environ['ODOO_URL']
-db = os.environ['ODOO_DB']
-uid = os.environ['ODOO_USER']
-password = os.environ['ODOO_PASSWORD']
+ODOO_DB = os.environ['ODOO_DB']
+ODOO_USER = os.environ['ODOO_USER']
+ODOO_PASSWORD = os.environ['ODOO_PASSWORD']
 
 
-redis_client = redis.Redis(host=host, 
+redis_client = redis.Redis(host=REDIS_HOST, 
                            port=6379, 
                            username='default',
-                           password=redis_password,
+                           password=REDIS_PASSWORD,
                            decode_responses=True,
                            socket_timeout=None,
                            connection_pool=None,
@@ -160,7 +160,7 @@ def update_folder_dict(path, bootstrap=False):
     """
 
     # Get the folder where 
-    dbx = dropbox.Dropbox(TOKEN)
+    dbx = dropbox.Dropbox(DROPBOX_TOKEN)
     folder_results = dbx.files_list_folder("", recursive=True )
     paths = list_dropbox_content_with_targets(folder_results, [DROPBOX_USER_DMS_PATH], list_type='both', full_path=True, format_dict_create=True)
     folder_dict = build_nested(paths)
@@ -289,7 +289,7 @@ def set_subscriber(url):
 
 def load_user_dms():
 
-    dbx = dropbox.Dropbox(TOKEN)
+    dbx = dropbox.Dropbox(DROPBOX_TOKEN)
     
         
     # Load user dms dict for the first time
@@ -352,51 +352,63 @@ def update_doc_templates(change):
         # send change.name
         
     if isinstance(change, FileMetadata):
-        dbx = dropbox.Dropbox(TOKEN)
+        dbx = dropbox.Dropbox(DROPBOX_TOKEN)
+        subscribers = get_subsrcibers()
 
-        # Connect to odoo
-        common = xmlrpc.client.ServerProxy(f'{url}/xmlrpc/2/common')
-        uid = common.authenticate(db, uid, password, {})
-        models = xmlrpc.client.ServerProxy(f'{url}/xmlrpc/2/object')
+        if not change.name.endswith('.docx'):
+            content_info += " but it was not a docx. we supress it"
+            dbx.files_delete(change.path_lower)
+            dbx.close()
+            return False
 
-        content_hash = redis_client.hget(change.name, 'content_hash')
-        if content_hash:
-            # compare the hashes to see if the content has changed
-            if change.content_hash != content_hash:
-                # TODO 
-                # send change.name, 
-                #      base64 pdf
-                #      link
-                content_info += "content has changed"
-                docx2html(change)
+        for url in subscribers:
 
-        else:
-            # TODO 
-            # Newly created file
-            # 
-            content_info += "file {} has been added".format(change.name)
-            
-            
-            if not change.name.endswith('.docx'):
+            try :
+                # Connect to odoo
+                common = xmlrpc.client.ServerProxy(f'{url}/xmlrpc/2/common')
+                uid = common.authenticate(ODOO_DB, ODOO_USER, ODOO_PASSWORD, {})
+                models = xmlrpc.client.ServerProxy(f'{url}/xmlrpc/2/object')
+            except Exception as e:
+                iprint("ERROR WITH: {}\nRemove link".format(url))
+                remove_subscriber(url)
+                iprint()
+                continue
 
-                content_info += " but it was not a docx. we supress it"
-                dbx.files_delete(change.path_lower)
+
+            content_hash = redis_client.hget(change.name, 'content_hash')
+            if content_hash:
+                # compare the hashes to see if the content has changed
+                if change.content_hash != content_hash:
+                    # TODO 
+                    # send change.name, 
+                    #      base64 pdf
+                    #      link
+                    content_info += "content has changed"
+
             else:
+                # TODO 
+                # Newly created file
+                # 
+                content_info += "file {} has been added".format(change.name)
+                
+
                 redis_client.hset(change.name, 'content_hash', change.content_hash)
                 link = dbx.sharing_create_shared_link(change.path_lower)
                 redis_client.hset(change.name, 'link', link.url)
-                docx2html(change)
+                # docx2html(change)
 
                 # Create file in Odoo
                 # TODO compute Docx b64 encoding
-                models.execute_kw(db, uid, password, 'template', 'create', [{
+                metadata, docx_resp = dbx.files_download(path=change.path_lower)
+                docx_encoded = base64.b64encode(docx_resp.content)
+                models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD, 'template', 'create', [{
                     'name': change.name,
-                    'link' : link,
+                    'shared_link' : link.url,
                     'file_docx' : docx_encoded
                 }])
-                
+                    
         dbx.close()
-            # TODO Download and generate html from docx
+                # TODO Download and generate html from docx
 
     iprint(content_info)
 
