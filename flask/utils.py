@@ -243,7 +243,7 @@ def get_subsrcibers():
     """Get the list of subscribers that registered to """
     subscribers = redis_client.get(REDIS_DBX_HOOKO_SUBSCRIBERS)
     if not subscribers:
-        subscribers = []
+        return []
     return eval(subscribers)
 
 def test_subscriber(subscriber):
@@ -398,7 +398,6 @@ def update_doc_templates(change):
                 # docx2html(change)
 
                 # Create file in Odoo
-                # TODO compute Docx b64 encoding
                 metadata, docx_resp = dbx.files_download(path=change.path_lower)
                 docx_encoded = base64.b64encode(docx_resp.content)
                 models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD, 'template', 'create', [{
