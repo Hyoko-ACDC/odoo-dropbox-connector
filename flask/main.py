@@ -21,11 +21,9 @@ import redis
 
 app = Flask(__name__)
 
-host = os.environ['REDIS_HOST']
-redis_password = os.environ['REDIS_PASSWORD']
 
 APP_SECRET = os.environ['APP_KEY']
-TOKEN = os.environ['DROPBOX_TOKEN']
+DROPBOX_TOKEN = os.environ['DROPBOX_TOKEN']
 
 
 # A random secret used by Flask to encrypt session data cookies
@@ -121,7 +119,7 @@ def process_user(account):
     cursor = get_cursor()
     iprint("Old cursor {}".format(cursor), False)
 
-    dbx = Dropbox(TOKEN)
+    dbx = Dropbox(DROPBOX_TOKEN)
     has_more = True
 
     while has_more:
@@ -129,10 +127,6 @@ def process_user(account):
 
         list_folder_continue = dbx.files_list_folder_continue(cursor)
 
-        path_dict = get_dict(REDIS_USER_DMS)
-
-        iprint(" - OLD - " * 3, False)
-        # iprint(json.dumps(path_dict['Users']['Students']['Christopher Smith'], indent=2), False)
         iprint(" - Change - " * 3, False)
         iprint(list_folder_continue, True)
 
@@ -141,7 +135,6 @@ def process_user(account):
         if not list_folder_continue.entries:
             iprint(" - No entries: load dms - " * 3)
             load_user_dms()
-            # iprint(json.dumps(path_dict['Users']['Students']['Christopher Smith'], indent=2), False)
             break
 
 
@@ -151,8 +144,8 @@ def process_user(account):
             iprint("Received following path : {}".format(path))
 
             # Changes in dms user
-            if path.startswith("/users"):
-                update_user_dms(path, path_dict, change)
+            if path.startswith(DROPBOX_TEACHERS_PATH) or path.startswith(DROPBOX_STUDENTS_PATH):
+                update_user_dms(path, change)
 
             if path.startswith("/admin/document templates"):
                 iprint("HERE in /admin/document templates")
@@ -171,9 +164,5 @@ if __name__ == '__main__':
     
     # Load user dms dict for the first time
     load_user_dms()
-    
-    
-    # Load document templates dms dict for the first time
-    # load_dms(DROPBOX_DOCUMENT_TEMPLATES_PATH, REDIS_DOCUMENT_TEMPLATES)
 
     app.run(debug=True, host='0.0.0.0')

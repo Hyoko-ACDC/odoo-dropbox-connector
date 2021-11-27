@@ -4,38 +4,47 @@ import redis
 import json
 import io
 from dropbox.files import DeletedMetadata, FolderMetadata, FileMetadata
-import mammoth
 import xmlrpc.client
 import base64
 import requests
+import re
+from tqdm import tqdm
 
 
-# REDIS REGISTERS
-REDIS_USER_DMS = 'dmsFitspro'
-REDIS_DOCUMENT_TEMPLATES = 'dmsDocumentTemplates'
-REDIS_DBX_HOOKO_SUBSCRIBERS = 'subscribers'  # list but stored as a string (need eval())
-
-
-
-# DROPBOX PATHS
-DROPBOX_USER_DMS_PATH = 'users'
-DROPBOX_DOCUMENT_TEMPLATES_PATH = '/admin/document templates'
-
-# SETTINGS
-DROPBOX_TOKEN = os.environ['DROPBOX_TOKEN']
-
+# REDIS
 REDIS_HOST = os.environ['REDIS_HOST']
+REDIS_PORT = os.environ['REDIS_PORT']
+REDIS_USER = os.environ['REDIS_USER']
 REDIS_PASSWORD = os.environ['REDIS_PASSWORD']
 
-# url = os.environ['ODOO_URL']
+# registers
+REDIS_USER_DMS = os.environ['REDIS_USER_DMS']
+REDIS_USER_ID_MAPPING = os.environ['REDIS_USER_ID_MAPPING']
+REDIS_DOCUMENT_TEMPLATES = os.environ['REDIS_DOCUMENT_TEMPLATES']
+REDIS_DBX_HOOKO_SUBSCRIBERS = os.environ['REDIS_DBX_HOOKO_SUBSCRIBERS'] # list but stored as a string (need eval())
+
+
+# DROPBOX
+DROPBOX_TOKEN = os.environ['DROPBOX_TOKEN']
+# paths
+DROPBOX_USER_DMS_PATH = os.environ['DROPBOX_USER_DMS_PATH']
+DROPBOX_DOCUMENT_TEMPLATES_PATH = os.environ['DROPBOX_DOCUMENT_TEMPLATES_PATH']
+DROPBOX_TEACHERS_PATH = os.environ['DROPBOX_TEACHERS_PATH']
+DROPBOX_STUDENTS_PATH = os.environ['DROPBOX_STUDENTS_PATH']
+
+
+# ODOO
 ODOO_DB = os.environ['ODOO_DB']
 ODOO_USER = os.environ['ODOO_USER']
 ODOO_PASSWORD = os.environ['ODOO_PASSWORD']
 
 
+# REGEX SPECIVIC USER SPACE PATH
+USER_PATH = r'\/users\/teachers\/[a-z\d ]+|\/users\/students\/[a-z\d ]+'
+
 redis_client = redis.Redis(host=REDIS_HOST, 
-                           port=6379, 
-                           username='default',
+                           port=REDIS_PORT,
+                           username=REDIS_USER,
                            password=REDIS_PASSWORD,
                            decode_responses=True,
                            socket_timeout=None,
@@ -94,19 +103,6 @@ def list_dropbox_content_with_targets(folder_results, targets, list_type='folder
     return paths
 
 
-def get_folder_from_dict(path, path_dict):
-    """Get the folder given in path from the dictionnary"""
-    segs = path.split('/')
-    current_folder = path_dict
-    for seg in segs:
-        if seg:
-            if seg in current_folder:
-                current_folder = current_folder[seg]
-            else:
-                raise AttributeError("path: {} does not exist at {}".format(path, seg))
-    return current_folder
-
-
 def build_nested_helper(path, container):
     is_dir = path.rfind('/') == len(path) - 1
     segs = path.split('/')
@@ -132,95 +128,136 @@ def build_nested(paths):
 
 
 
-    
-# TODO Make the rec function tail recursive
-def list_folder_from_folder(folder, recursive=True, path=''):
-    """Helper function for listing directories"""
-    if not recursive:
-        return folder.get(list(folder.keys()))
-    dirs = []
-    if isinstance(folder, dict):
-        for k in folder.keys():
-            rec_path = k if not path else path + '/' + k
-            if k == 'files':
-                continue  
-            if isinstance(folder[k], dict):
-                # go recursive
-                dirs.append(rec_path)
-                dirs += list_folder_from_folder(folder[k], path=rec_path)
-    return dirs
+
     
 
-def update_folder_dict(path, bootstrap=False):
-    """Update the pickle dict representation of the GED
-    args:
-        path: path were the folder should be updated
-        bootstrap: rather the dict should be updated entirely from scratch
+def get_user_folder_dict(path):
+    """"Get the user folder """
+    # get the path of the user's root folder
+    user_path = re.findall(USER_PATH, path)[0]
+    
+    # get the folder's id of the path
+    user_folder_id = json.loads(redis_client.get(REDIS_USER_ID_MAPPING)).get(user_path)
+    if not user_folder_id:
+        iprint("folder not found")
+        return False, False, False
+    
+    # get the folder's dict
+    user_folder_dict = json.loads(redis_client.hget(REDIS_USER_DMS, user_folder_id))
+
+    # Seek the location in the folder dict that needs to be updated and updates it
+    path = path.replace(user_path, '')
+
+    return user_folder_dict, user_folder_id, path
+
+
+def delete_file_or_folder(path):
+    """Delete the file or folder in the relevant user folder dict at the path location"""
+    
+    # Test if the path 
+    is_deletation_user = re.match(USER_PATH.replace(']+',']+$'), path)
+    if is_deletation_user:
+        # delete user space
+        user_id_dict = json.loads(redis_client.get(REDIS_USER_ID_MAPPING))
+        redis_client.hdel(REDIS_USER_DMS, user_id_dict[path])
+        del user_id_dict[path]
+        return redis_client.set(REDIS_USER_ID_MAPPING, json.dumps(user_id_dict))
         
-    """
+        
 
-    # Get the folder where 
-    dbx = dropbox.Dropbox(DROPBOX_TOKEN)
-    folder_results = dbx.files_list_folder("", recursive=True )
-    paths = list_dropbox_content_with_targets(folder_results, [DROPBOX_USER_DMS_PATH], list_type='both', full_path=True, format_dict_create=True)
-    folder_dict = build_nested(paths)
+    user_folder_dict, user_folder_id, path = get_user_folder_dict(path)
 
-
-
-    folder_dict_to_update = load_folder_dict()
-
-
-    return
-
-def delete_file_from_dict(file_path, path_dict):
-    """In place delete file in the path dictionnary"""
-    segs = file_path.split('/')
+    segs = path.split('/')
     file_or_dir = segs[-1]
     segs = segs[:-1]
-    current_folder = path_dict
+    current_folder = user_folder_dict
     for seg in segs:
         if seg:
             if seg in current_folder:
                 current_folder = current_folder[seg]
             else:
-                raise AttributeError("path: {} does not exist at {}".format(file_path, seg))
+                raise AttributeError("path: {} does not exist at {}".format(path, seg))
 
     iprint("SHOULD DELETE: {}".format(file_or_dir))
     
     if file_or_dir in current_folder:
         del current_folder[file_or_dir]
-        return True
 
     
     if 'files' in current_folder and file_or_dir in current_folder['files'] :
         current_folder['files'].remove(file_or_dir)
-        
-
-        return True
     
-    return False
+    iprint(current_folder)
+    iprint("----")
+    iprint(user_folder_dict)
+    iprint("----")
+    
+    return redis_client.hset(REDIS_USER_DMS, user_folder_id,  json.dumps(user_folder_dict))
 
-def add_file_from_dict(file_path, path_dict):
-    """In place add file in the path dictionnary"""
-    segs = file_path.split('/')
+
+
+def add_file(file_path):
+    """Add the file in the relevant user folder dict at the path location"""
+    user_folder_dict, user_folder_id, file_path_relative = get_user_folder_dict(file_path)
+
+    segs = file_path_relative.split('/')
     file = segs[-1]
     segs = segs[:-1]
-    current_folder = path_dict
+    current_folder = user_folder_dict
     for seg in segs:
         if seg:
             if seg in current_folder:
+                
                 current_folder = current_folder[seg]
             else:
-                raise AttributeError("path: {} does not exist at {}".format(file_path, seg))
-
-    iprint("SHOULD ADDFILE or DICT: {}".format(file_path, path_dict))
+                raise AttributeError("path: {} does not exist at {}".format(file_path_relative, seg))
+    iprint("SHOULD ADDFILE or DICT: {}".format(file_path_relative, user_folder_dict))
     if not 'files' in current_folder:
         current_folder['files'] = []
     
     if file not in current_folder['files'] :
         current_folder['files'].append(file)
-        return True
-    return False
+
+    # update the new file in redis
+    return redis_client.hset(REDIS_USER_DMS, user_folder_id,  json.dumps(user_folder_dict))
+
+
+def add_dir(change, dir_path):
+    """Add the file in the relevant user folder dict at the path location"""
+    # Test if the path 
+    is_creation_user = re.match(USER_PATH.replace(']+',']+$'), dir_path)
+
+    # New user
+    if is_creation_user:
+        # add the user in the redis user id mapping dict
+        path_to_id = json.loads(redis_client.get(REDIS_USER_ID_MAPPING))
+        path_to_id[dir_path] = change.id
+        redis_client.set(REDIS_USER_ID_MAPPING, json.dumps(path_to_id))
+        iprint('new user with id: {}, and path: {}'.format(change.id, dir_path))
+        # create the user space
+        return redis_client.hset(REDIS_USER_DMS, change.id, '{}')
+
+    user_folder_dict, user_folder_id, file_path_relative = get_user_folder_dict(dir_path)
+
+    segs = dir_path.split('/')
+    dir_ = segs[-1]
+    segs = segs[:-1]
+    current_folder = user_folder_dict
+    for seg in segs:
+        if seg:
+            if seg in current_folder:
+                current_folder = current_folder[seg]
+            else:
+                error_msg = "path: {} does not exist at {}".format(dir_path, seg)
+                iprint(error_msg)
+                # raise AttributeError()
+    if dir_ not in current_folder :
+        current_folder[dir_] = {}
+    
+    iprint(user_folder_dict)
+
+    # update the new dir in redis
+    return redis_client.hset(REDIS_USER_DMS, user_folder_id,  json.dumps(user_folder_dict))
 
 
 # Getters & Setters
@@ -289,30 +326,44 @@ def set_subscriber(url):
 
 def load_user_dms():
 
+    # Connection to dropbox
     dbx = dropbox.Dropbox(DROPBOX_TOKEN)
-    
-        
-    # Load user dms dict for the first time
-    # Get list of folder
-    folder_results = dbx.files_list_folder(path="", recursive=True)
-    iprint("In Load dms \n{}".format(folder_results), False)
-    # Parse the given result and return a clean list of paths
-    paths = list_dropbox_content_with_targets(folder_results, [DROPBOX_USER_DMS_PATH], list_type='both', full_path=True, format_dict_create=True)
+
+    # List users directories using DBX API
+    paths=[DROPBOX_STUDENTS_PATH, DROPBOX_TEACHERS_PATH]
+    path_to_id = dict()
+    for path in paths:
+        res = dbx.files_list_folder(path)
+        for r in res.entries:
+            path_to_id[r.path_lower] = r.id
+            
+
+    folder_results = dbx.files_list_folder("/users/", recursive=True )
+    paths = list_dropbox_content_with_targets(folder_results, [], list_type='both', full_path=True, format_dict_create=True)
 
 
-    
+
     while folder_results.has_more:
         # Folder has more results
         folder_results = dbx.files_list_folder_continue(folder_results.cursor)
-        iprint("In Load dms Continue :\n{}".format(folder_results), False)
-        paths += list_dropbox_content_with_targets(folder_results, [DROPBOX_USER_DMS_PATH], list_type='both', full_path=True, format_dict_create=True)        
+        #print("In Load dms Continue :\n{}".format(folder_results), False)
+        paths += list_dropbox_content_with_targets(folder_results, [], list_type='both', full_path=True, format_dict_create=True)  
 
-    # build the user dms dictionnary
-    folder_dict = build_nested(paths)
+    path_dict = build_nested(paths)
 
-    # Save it to redis DB
-    folder_dict_json = json.dumps(folder_dict)
-    redis_client.set(REDIS_USER_DMS, folder_dict_json)
+    # Construct the dict with all users as keys and their GED architecture as value
+    users_dict = {DROPBOX_STUDENTS_PATH + k : v for (k, v) in path_dict["users"]["students"].items()}
+    users_dict.update({DROPBOX_TEACHERS_PATH + k : v for (k, v) in path_dict["users"]["teachers"].items()})
+
+
+    # Fill users GED architectures in Redis
+    for path, d in tqdm(users_dict.items()):
+        d_json = json.dumps(d)
+        redis_client.hset(REDIS_USER_DMS, path_to_id[path], d_json)
+    redis_client.set(REDIS_USER_ID_MAPPING, json.dumps(path_to_id))
+        
+            
+
 
     # Update cursor
     set_cursor(folder_results.cursor)
@@ -320,24 +371,7 @@ def load_user_dms():
     dbx.close
 
 
-def add_dir_from_dict(dir_path, path_dict):
-    """In place add file in the path dictionnary"""
-    segs = dir_path.split('/')
-    dir_ = segs[-1]
-    segs = segs[:-1]
-    current_folder = path_dict
-    for seg in segs:
-        if seg:
-            if seg in current_folder:
-                current_folder = current_folder[seg]
-            else:
-                error_msg = "path: {} does not exist at {}".format(dir_path, seg)
-                iprint(error_msg)
-                # raise AttributeError()
-    if dir_ not in current_folder :
-        current_folder[dir_] = {}
-        return True
-    return False
+
 
 def update_doc_templates(change):
     content_info = "Info : "
@@ -412,20 +446,16 @@ def update_doc_templates(change):
     iprint(content_info)
 
 
-def update_user_dms(path, path_dict, change):
+def update_user_dms(path, change):
     if isinstance(change, DeletedMetadata):
-        sucess = delete_file_from_dict(path, path_dict)
+        sucess = delete_file_or_folder(path)
         iprint("DELETE! Sucess = {}".format(sucess))
-    if isinstance(change, FileMetadata):
-        add_file_from_dict(path, path_dict)
+    elif isinstance(change, FileMetadata):
+        add_file(path)
         iprint("ADDFILE!")
-    if isinstance(change, FolderMetadata):
+    elif isinstance(change, FolderMetadata):
         iprint("ADDFOLDER!")
-        add_dir_from_dict(path, path_dict)
-    
-    iprint(" - New -" * 3, False)
-    #iprint(json.dumps(path_dict['Users']['Students']['Christopher Smith'], indent=2), False)
-
-
-    set_dict(DROPBOX_USER_DMS_PATH, path_dict)
+        add_dir(change, path)
+    else:
+        iprint("Error, change not taken into account")
 
