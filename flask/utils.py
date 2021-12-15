@@ -40,7 +40,7 @@ ODOO_PASSWORD = os.environ['ODOO_PASSWORD']
 
 
 # REGEX SPECIVIC USER SPACE PATH
-USER_PATH = r'\/users\/teachers\/[a-z\d ]+|\/users\/students\/[a-z\d ]+'
+USER_PATH = r'\/users\/teachers\/[a-zA-Za-zÀ-ÖØ-öø-ÿ\d ]+|\/users\/students\/[a-zA-Za-zÀ-ÖØ-öø-ÿ\d ]+'
 
 redis_client = redis.Redis(host=REDIS_HOST, 
                            port=REDIS_PORT,
@@ -137,10 +137,16 @@ def get_user_folder_dict(path):
     user_path = re.findall(USER_PATH, path)[0]
     
     # get the folder's id of the path
+    print(f"user_path: {user_path}")
     user_folder_id = json.loads(redis_client.get(REDIS_USER_ID_MAPPING)).get(user_path)
     if not user_folder_id:
-        iprint("folder not found")
-        return False, False, False
+        iprint(f"WARNING: folder not found for path: {path}")
+        # reloading whole GED
+        load_user_dms()
+        user_folder_id = json.loads(redis_client.get(REDIS_USER_ID_MAPPING)).get(user_path)
+        if not user_folder_id:
+            raise Exception(f"USER of the path {path} does not exist in the GED")
+        
     
     # get the folder's dict
     user_folder_dict = json.loads(redis_client.hget(REDIS_USER_DMS, user_folder_id))
@@ -447,6 +453,8 @@ def update_doc_templates(change):
 
 
 def update_user_dms(path, change):
+    # UTF-8 encode path (REDIS stores eveything as utf-8 encoded)
+    # path = path.encode()
     if isinstance(change, DeletedMetadata):
         sucess = delete_file_or_folder(path)
         iprint("DELETE! Sucess = {}".format(sucess))
