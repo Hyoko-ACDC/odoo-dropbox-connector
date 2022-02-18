@@ -7,8 +7,6 @@ import urllib.parse
 import sys
 import validators
 
-
-
 from dropbox import Dropbox
 from flask import abort, Flask, redirect, render_template, Response, request, session, url_for
 import requests  # Careful not to confuse request (which is the global FLask variable) and requests lib
@@ -16,14 +14,12 @@ from utils import *
 import redis 
 
 
-
-
-
 app = Flask(__name__)
 
-
+# Fetch constants from .env file 
 APP_SECRET = os.environ['APP_KEY']
 DROPBOX_TOKEN = os.environ['DROPBOX_TOKEN']
+DROPBOX_DOCUMENT_TEMPLATES_PATH = os.environ['DROPBOX_DOCUMENT_TEMPLATES_PATH']
 
 
 # A random secret used by Flask to encrypt session data cookies
@@ -32,13 +28,14 @@ app.secret_key = os.environ['FLASK_SECRET_KEY']
 
 @app.route('/')
 def hello_world():
+    '''Hello World, simply to test if the server is accessible from the outside world.'''
+
     return 'Hey, we have Flask in a Docker container!'
 
 @app.route('/subscribe', methods=['POST'])
 def subscribe():
-    """
-    End point use by Odoo instances (or other) to subscribe to the connector.
-    """
+    '''End point use by Odoo instances (or other) to subscribe to the connector.'''
+    
     iprint("new subscriber")
     if request.data:
         return "data should be a form", 400
@@ -55,9 +52,8 @@ def subscribe():
 
 @app.route('/subscribers_test', methods=['GET'])
 def subscribers_test():
-    """
-    Try sending http request to subscribers, delete if response not correct.
-    """
+    '''Try sending http request to subscribers, delete if response not correct.'''
+
     subscribers = get_subsrcibers()
     removed_subscribers = []
     for subscriber in subscribers:
@@ -93,6 +89,7 @@ def verify():
 @app.route('/webhook', methods=['POST'])
 def webhook():
     '''Receive a list of changed user IDs from Dropbox and process each.'''
+
 
     # Make sure this is a valid request from Dropbox
     signature = request.headers.get('X-Dropbox-Signature')
@@ -146,9 +143,8 @@ def process_user(account):
             # Changes in dms user
             if path.startswith(DROPBOX_TEACHERS_PATH) or path.startswith(DROPBOX_STUDENTS_PATH):
                 update_user_dms(path, change)
-
-            if path.startswith("/admin/document templates"):
-                iprint("HERE in /admin/document templates")
+            if path.startswith(DROPBOX_DOCUMENT_TEMPLATES_PATH):
+                iprint("HERE in {}".format(DROPBOX_DOCUMENT_TEMPLATES_PATH))
                 update_doc_templates(change)
 
         # Update cursor
@@ -164,5 +160,4 @@ if __name__ == '__main__':
     
     # Load user dms dict for the first time
     load_user_dms()
-
     app.run(debug=True, host='0.0.0.0')
