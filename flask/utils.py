@@ -54,19 +54,28 @@ redis_client = redis.Redis(host=REDIS_HOST,
 
 
 def iprint(str_='', i=True):
+    """Print log in the server. Usefull for debugging.
+
+    Args:
+        str_ (str, optional): Logs to print on the server. Defaults to ''.
+        i (bool, optional): Global control Whether to print or not. Defaults to True.
+    """
     if i:
         print(str_, flush=True)
 
 
 def list_dropbox_content_with_targets(folder_results, targets, list_type='folder', full_path=False, format_dict_create=False):
     """List content of given folder_results filtered by the targets excluding the basic path
-    params:
-        folder_results: output of files_list_folder dropbox sdk function
-        targets: exclude all path but the targets (name of the users to keep). If targets is null, 
-            returns all the folder's path
-        list_folder: If set to True, liste exclusively folder. Else list exclusively files
-        list_type: Either folder, file or both
+
+    Args:
+        folder_results : output of files_list_folder dropbox sdk function
+        targets (List[str]): exclude all path but the targets (name of the users to keep). If targets is null, 
+        list_type (str, optional): Either folder, file or both. Defaults to 'folder'.
+
+    Returns:
+        List[str]: All the folder's path
     """
+    
     TYPES_TO_LIST = {
         'file' : FileMetadata,
         'folder' : FolderMetadata,
@@ -76,7 +85,7 @@ def list_dropbox_content_with_targets(folder_results, targets, list_type='folder
     results = folder_results.entries
     type_to_keep = TYPES_TO_LIST[list_type]
     
-    
+    # Process all the entries to extract only usefull information
     for result in results: 
         if not isinstance(result,type_to_keep):
             continue
@@ -87,6 +96,7 @@ def list_dropbox_content_with_targets(folder_results, targets, list_type='folder
             if isinstance(result, FolderMetadata):
                 path_lower += '/'
         
+        # Exclud if it does not belong to targets
         if not targets:
             paths.append(path_lower)
             continue
@@ -104,10 +114,15 @@ def list_dropbox_content_with_targets(folder_results, targets, list_type='folder
 
 
 def build_nested_helper(path, container):
+    ''''Helper function of the build_nested function'''
+    
+    
     is_dir = path.rfind('/') == len(path) - 1
     segs = path.split('/')
     head = segs[0]
     tail = segs[1:]
+    
+    # Use recurtion to build the dictionnary
     if tail:
         if head not in container:
             container[head] = {}
@@ -118,9 +133,9 @@ def build_nested_helper(path, container):
                 container['files'] = [head]
             else:
                 container['files'].append(head)
-            #iprint(container)
 
 def build_nested(paths):
+    ''''From a list of paths, returns a dictionnary representation'''
     container = {}
     for path in paths:
         build_nested_helper(path, container)
@@ -132,7 +147,18 @@ def build_nested(paths):
     
 
 def get_user_folder_dict(path):
-    """"Get the user folder """
+    """Get the user folder in redis according to the path 
+
+    Args:
+        path (str): path to get the user folder
+
+    Raises:
+        Exception: if the path does not exists in the redis register
+
+    Returns:
+        tuple(user_folder_dict, user_folder_id, path): the folder's dict of the user, id and path.
+    """
+    
     # get the path of the user's root folder
     user_path = re.findall(USER_PATH, path)[0]
     
@@ -158,7 +184,17 @@ def get_user_folder_dict(path):
 
 
 def delete_file_or_folder(path):
-    """Delete the file or folder in the relevant user folder dict at the path location"""
+    """Delete a file or a folder in the relevant user folder dict at the path location
+
+    Args:
+        path (str): the file or folder path to be deleted
+
+    Raises:
+        AttributeError: If the path does not exists in redis
+
+    Returns:
+        int: The number of fields that were added
+    """
     
     # Test if the path 
     is_deletation_user = re.match(USER_PATH.replace(']+',']+$'), path)
@@ -173,10 +209,13 @@ def delete_file_or_folder(path):
 
     user_folder_dict, user_folder_id, path = get_user_folder_dict(path)
 
+    # Process the path
     segs = path.split('/')
     file_or_dir = segs[-1]
     segs = segs[:-1]
     current_folder = user_folder_dict
+    
+    # Recursively resolve the path
     for seg in segs:
         if seg:
             if seg in current_folder:
@@ -203,12 +242,26 @@ def delete_file_or_folder(path):
 
 
 def add_file(file_path):
-    """Add the file in the relevant user folder dict at the path location"""
+    """Add a file to the appropriate user's space
+
+    Args:
+        file_path (str): the file path (it contains also 
+
+    Raises:
+        AttributeError: If the path does not exists in redis
+
+    Returns:
+        int: The number of fields that were added
+    """
+    
     user_folder_dict, user_folder_id, file_path_relative = get_user_folder_dict(file_path)
 
+    # Process the path
     segs = file_path_relative.split('/')
     file = segs[-1]
     segs = segs[:-1]
+    
+    # Recursively resolve the path
     current_folder = user_folder_dict
     for seg in segs:
         if seg:
@@ -229,7 +282,15 @@ def add_file(file_path):
 
 
 def add_dir(change, dir_path):
-    """Add the file in the relevant user folder dict at the path location"""
+    """Add a folder in the relevant user folder dict at the path location
+
+    Args:
+        change : The information about the new directory.
+        dir_path (str): Path of the new directory
+
+    Returns:
+        int: The number of fields that were added
+    """
     # Test if the path 
     is_creation_user = re.match(USER_PATH.replace(']+',']+$'), dir_path)
 
@@ -245,6 +306,7 @@ def add_dir(change, dir_path):
 
     user_folder_dict, user_folder_id, file_path_relative = get_user_folder_dict(dir_path)
 
+    # Recursively resolve the path
     segs = dir_path.split('/')
     dir_ = segs[-1]
     segs = segs[:-1]
@@ -256,40 +318,47 @@ def add_dir(change, dir_path):
             else:
                 error_msg = "path: {} does not exist at {}".format(dir_path, seg)
                 iprint(error_msg)
-                # raise AttributeError()
     if dir_ not in current_folder :
         current_folder[dir_] = {}
-    
     iprint(user_folder_dict)
 
     # update the new dir in redis
     return redis_client.hset(REDIS_USER_DMS, user_folder_id,  json.dumps(user_folder_dict))
 
 
-# Getters & Setters
-
+# Getters & Setters in Redis
 def get_cursor():
+    '''Get the current cursor stored in redis'''
     return redis_client.hget('cursors', 'cursor')
 
+
 def set_cursor(cursor):
+    """Set the current cursor stored in redis
+
+    Args:
+        cursor (str): The cursor to be set
+
+    Returns:
+        int: The number of fields that were added
+    """
     return redis_client.hset('cursors', 'cursor', cursor)
 
-def set_dict(register, path_dict):
-    path_dict_json = json.dumps(path_dict)
-    return redis_client.set(REDIS_USER_DMS, path_dict_json)
-
-def get_dict(register):
-    path_dict = redis_client.get(register)
-    return json.loads(path_dict)
-
 def get_subsrcibers():
-    """Get the list of subscribers that registered to """
+    '''Get the list of subscribers that registered themselves to this server.'''
     subscribers = redis_client.get(REDIS_DBX_HOOKO_SUBSCRIBERS)
     if not subscribers:
         return []
     return eval(subscribers)
 
 def test_subscriber(subscriber):
+    """Test if a subscriber is reachable. If not it deletes the subscriber.
+
+    Args:
+        subscriber (str): Subscriber to be tested
+
+    Returns:
+        bool: True if the subscriber is reachable, False otherwise.
+    """
     try:
         resp = requests.get(subscriber, timeout=10)
     except:
@@ -301,14 +370,24 @@ def test_subscriber(subscriber):
     return True
 
 def remove_subscriber(url):
+    """Remove a subscriber
+
+    Args:
+        url (str): url of the subscriber to be removed
+    """
     subscribers = get_subsrcibers()
     subscribers.remove(url)
     redis_client.set(REDIS_DBX_HOOKO_SUBSCRIBERS, str(subscribers))
 
 
 def set_subscriber(url):
-    """Set the subscriber space. i.e. Enter the subscriber's url in the list of subscribers and set the appropriate user space in redis.
-    Where the key 
+    """Set the subscriber space. i.e. Enter the subscriber's url in the list of subscribers.
+
+    Args:
+        url (str): url of the subscriber to be added.
+
+    Returns:
+        list[str]: All the subscribers
     """
     
     # Add the subscriber to the list
@@ -331,7 +410,9 @@ def set_subscriber(url):
     return subscribers
 
 def load_user_dms():
-
+    """Parse and fill the folder structure into redis of each user's space in Dropbox. 
+    Script used at startup to bootstrap the register.
+    """
     # Connection to dropbox
     dbx = dropbox.Dropbox(DROPBOX_TOKEN)
 
@@ -380,6 +461,12 @@ def load_user_dms():
 
 
 def update_doc_templates(change):
+    """Process a document template changement. 
+    Attention, this method is not fully finished. Some work needs to be done
+
+    Args:
+        change: The changement in Dropbox
+    """
     content_info = "Info : "
     
 
@@ -453,17 +540,29 @@ def update_doc_templates(change):
 
 
 def update_user_dms(path, change):
-    # UTF-8 encode path (REDIS stores eveything as utf-8 encoded)
-    # path = path.encode()
+    """Update the user folder structure representation according to the changement.
+
+    Args:
+        path (str): Where the changement took place
+        change : The changement itself
+    """
+    
+    # The changement concerns a deletation of a file/folder 
     if isinstance(change, DeletedMetadata):
         sucess = delete_file_or_folder(path)
         iprint("DELETE! Sucess = {}".format(sucess))
+    
+    # The changement concerns an upload of a file
     elif isinstance(change, FileMetadata):
         add_file(path)
         iprint("ADDFILE!")
+        
+    # The changement concerns an upload of a folder
     elif isinstance(change, FolderMetadata):
         iprint("ADDFOLDER!")
         add_dir(change, path)
+        
+    # This should not happend
     else:
         iprint("Error, change not taken into account")
 

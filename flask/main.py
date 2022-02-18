@@ -105,25 +105,31 @@ def webhook():
         # good idea to add the work to a reliable queue and process the queue
         # in a worker process.
         threading.Thread(target=process_user, args=(account,)).start()
-        # process_user(account)
         
     return ''
 
 def process_user(account):
-    '''Call /files/list_folder for the given user ID and process any changes.'''
+    """Fetch the changes that triggered the webhook and calls the appropriate function to process these changes.
 
-    # cursor for the user (Only changes should be listed here)
+    Args:
+        account : The dropbox account of the user that generated the hook (not used so far).
+    """
+
+    # get the cursor stored in redis
     cursor = get_cursor()
     iprint("Old cursor {}".format(cursor), False)
 
     dbx = Dropbox(DROPBOX_TOKEN)
     has_more = True
 
+    # Process all the changes
     while has_more:
         assert(cursor is not None)
 
+        # List of changes that triggered the webhook
         list_folder_continue = dbx.files_list_folder_continue(cursor)
 
+        # Use to debug
         iprint(" - Change - " * 3, False)
         iprint(list_folder_continue, True)
 
@@ -135,7 +141,7 @@ def process_user(account):
             break
 
 
-        # Proceed to changes
+        # Redirect changes to appropriate function calls
         for change in list_folder_continue.entries:
             path = change.path_lower
             iprint("Received following path : {}".format(path))
@@ -143,8 +149,8 @@ def process_user(account):
             # Changes in dms user
             if path.startswith(DROPBOX_TEACHERS_PATH) or path.startswith(DROPBOX_STUDENTS_PATH):
                 update_user_dms(path, change)
+            # Changes in document templates
             if path.startswith(DROPBOX_DOCUMENT_TEMPLATES_PATH):
-                iprint("HERE in {}".format(DROPBOX_DOCUMENT_TEMPLATES_PATH))
                 update_doc_templates(change)
 
         # Update cursor
