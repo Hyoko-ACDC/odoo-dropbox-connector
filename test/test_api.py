@@ -10,10 +10,11 @@ import names
 
 load_dotenv()
 
-HOOK_WAITING_TIME = 30
+HOOK_WAITING_TIME = 20
 
 NAME_1 = names.get_full_name()
-
+FILE_NAME_1 = "f1.pdf"
+PATH_FILE_1 = "./files/" + FILE_NAME_1
 
 
 
@@ -75,15 +76,37 @@ def test_create_one_user(one_student_name):
   folder_id = user_folder_id_dict.get(DROPBOX_STUDENTS_PATH + one_student_name.lower(), None)
   assert folder_id == new_folder.id
 
-def test_upload_simple_file(one_student_name):
+
+
+
+def test_upload_one_file(one_student_name):
   """Upload a file in user GED"""
-  new_folder = dbx.files_create_folder(DROPBOX_STUDENTS_PATH + one_student_name)
-  print(new_folder)
-  time.sleep(HOOK_WAITING_TIME)
-  # See if there is an entry in Redis
+  # See if the user exists
   user_folder_id_dict=json.loads(redis_client.get(REDIS_USER_ID_MAPPING))
   folder_id = user_folder_id_dict.get(DROPBOX_STUDENTS_PATH + one_student_name.lower(), None)
-  assert folder_id == new_folder.id
+  assert folder_id is not None
+  
+  with open(PATH_FILE_1, 'rb') as f:
+    meta = dbx.files_upload(f.read(), folder_id + "/f1.pdf")
+  
+  time.sleep(HOOK_WAITING_TIME)
+  user_folder_content = redis_client.hget(REDIS_USER_DMS, folder_id)
+  expected_result = '{"files": ["f1.pdf"]}'
+  assert expected_result == user_folder_content
+
+
+def test_supress_one_file(one_student_name):
+  # See if the user exists
+  user_folder_id_dict=json.loads(redis_client.get(REDIS_USER_ID_MAPPING))
+  folder_id = user_folder_id_dict.get(DROPBOX_STUDENTS_PATH + one_student_name.lower(), None)
+  assert folder_id is not None
+  
+  meta = dbx.files_delete_v2(folder_id + "/f1.pdf")
+  time.sleep(HOOK_WAITING_TIME)
+  user_folder_content = redis_client.hget(REDIS_USER_DMS, folder_id)
+  expected_result = '{"files": []}'
+  assert expected_result == user_folder_content
+
 
   # tests
 def test_supress_user(one_student_name):
@@ -116,14 +139,6 @@ def test_create_multiple_users():
   time.sleep(4)
   redis_client
 
-  raise NotImplementedError
-
-
-
-
-@pytest.mark.skip
-def test_upload_one_file():
-  """Create a user and make sur that user is in the GED"""
   raise NotImplementedError
 
 
