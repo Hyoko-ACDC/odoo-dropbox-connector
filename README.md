@@ -21,7 +21,7 @@ The connection (so far) are only initated by Odoo. Therefore, please change the 
 
 
   
-## Environement 
+## Environment 
 The connector is containerized. Thus, it includes a `docker-compose.yml` file which defines a Redis database in version 6.2 and a Flask 2.0.2 server with python 3.9.1. 
 
 The external python libraries that the Flask server uses are the following: `Flask==2.0.2`, `dropbox==11.18.0`, `redis`, `python-dotenv`, `validators`, `hiredis`, `tqdm` 
@@ -50,7 +50,7 @@ The tasks performed by this connector are the following:
 
 
 ## Implementation
-At launch, the Flask server automatically parse Dropbox and fill the Redis database (see load_user_dms in odoo-dropbox-connector/flask/utils.py) of the tree.
+At launch, the Flask server automatically parse Dropbox and fill the Redis database (see [load_user_dms](https://github.com/Hyoko-ACDC/odoo-dropbox-connector/blob/main/flask/utils.py#L542-L567)).
 
 ### Global structure
 In the flask folder two files compose the server: 
@@ -59,7 +59,7 @@ In the flask folder two files compose the server:
 
 
 ### Redis registers
-4 registers are present in Redis: 
+There are 4 registers in Redis: 
   * `dmsFitspro` : Contains a folder_id mapping to a dictionary which is nothing but a representation of that folder's tree structure (having folder_id as id) in Dropbox.
 
   * `dmsUserIdMapping`: Contains a folder_id to user_name mapping
