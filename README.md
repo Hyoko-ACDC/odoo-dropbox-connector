@@ -30,19 +30,17 @@ Any change and saving of the computer code will cause a refresh of the code with
 
 An .env file must be present in the odoo-dropbox-connector/flask folder. It contains the environment variables and is loaded by the Flask server code at launch. A `.env_sample` file is left to get inspiration (the `.env` file we used is left in the documentation). 
 
-At the time of writing, the `folder_id` branch is the most up-to-date.
-
 
 
 ## Tasks of the connector
 
 
 The tasks performed by this connector are the following:
-  1. Maintains a representation of the state of the student and teacher DMS tree in dropbox by means of a webhook (see Dropbox section point on installing the Dropbox environment).
+  1. Maintains a representation of the state of the student and teacher DMS (Document Managment System) tree in dropbox by means of a webhook (see Dropbox section point on installing the Dropbox environment).
 
   2. Returns this representation when the ERP requests it (this happens when a user wants to upload or delete a file in a storage space)
 
-  3. Transmits to Odoo any change in the document templates (see Dropbox section, partially implemented).
+  3. Transmits to Odoo any change in the document templates (see the Dropbox section in the Documentation).
 
 
 
